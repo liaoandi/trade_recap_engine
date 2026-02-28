@@ -23,11 +23,11 @@ env/
 .gemini/
 
 # Personal Trading Data & Logs (DO NOT COMMIT)
-# 屏蔽所有的输入输出目录，防止泄露个人交易和持仓记录
-input/
-auto_data/
-semi_data/
-reports/
+# 屏蔽所有的输入输出目录（含 symlink），防止泄露个人交易和持仓记录
+input
+auto_data
+semi_data
+reports
 
 # Archives
 *.zip
