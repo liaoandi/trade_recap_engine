@@ -32,9 +32,16 @@ INPUT_LATEST_ROOT = PROJECT_ROOT / "input" / "latest"
 SEMI_DATA_ROOT = PROJECT_ROOT / "semi_data"
 OUTPUT_REPORTS_ROOT = PROJECT_ROOT / "reports"
 PROCESSED_DIFF_ROOT = SEMI_DATA_ROOT / "processed" / "artifacts" / "diff"
-ENV_PATH = Path(os.getenv("ENV_PATH", PROJECT_ROOT / ".env"))
-FIXED_MODEL = "gemini-3-pro-preview"
+ENV_PATH = Path(os.getenv("ENV_PATH", "~/.config/api-keys.env")).expanduser()
+FIXED_MODEL = "gemini-3.1-pro-preview"
 TURN_BLOCK_RE = re.compile(r"(^## Turn \d+.*?)(?=^## Turn \d+|\Z)", re.S | re.M)
+AUTH_ENV_KEYS = (
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_PROJECT",
+    "GEMINI_API_KEY",
+    "VERTEX_LOCATION",
+)
 
 
 class RequestTimeoutError(RuntimeError):
@@ -61,7 +68,9 @@ def alarm_timeout(seconds: int):
 
 
 def load_env(path: Path) -> Dict[str, str]:
-    env: Dict[str, str] = {}
+    env: Dict[str, str] = {
+        key: value for key in AUTH_ENV_KEYS if (value := os.environ.get(key))
+    }
     if not path.exists():
         return env
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():

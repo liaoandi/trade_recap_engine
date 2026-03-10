@@ -28,11 +28,18 @@ from google import genai
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OLD_ZIP = PROJECT_ROOT / "input" / "zips" / "old_20260213.zip"
 DEFAULT_ZIPS_ROOT = PROJECT_ROOT / "input" / "zips"
-DEFAULT_ENV = Path("/Users/antonio/Desktop/.env")
+DEFAULT_ENV = Path(os.getenv("ENV_PATH", "~/.config/api-keys.env")).expanduser()
 ROOT = Path(__file__).resolve().parent
 SEMI_DATA_ROOT = PROJECT_ROOT / "semi_data"
 RUNS_ROOT = SEMI_DATA_ROOT / "processed" / "runs"
-FIXED_MODEL = "gemini-3-pro-preview"
+FIXED_MODEL = "gemini-3.1-pro-preview"
+AUTH_ENV_KEYS = (
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_PROJECT",
+    "GEMINI_API_KEY",
+    "VERTEX_LOCATION",
+)
 
 DATE_RE = re.compile(r"^\*\*Date\*\*:\s*(.+)$", re.M)
 TURN_RE = re.compile(r"^## Turn (\d+)\s*$", re.M)
@@ -46,7 +53,9 @@ class Turn:
 
 
 def load_env(path: Path) -> Dict[str, str]:
-    env: Dict[str, str] = {}
+    env: Dict[str, str] = {
+        key: value for key in AUTH_ENV_KEYS if (value := os.environ.get(key))
+    }
     if not path.exists():
         return env
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -76,7 +85,20 @@ def extract_zip(src_zip: Path, out_dir: Path) -> None:
         raise FileNotFoundError(f"ZIP not found: {src_zip}")
     out_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(src_zip, "r") as zf:
-        zf.extractall(out_dir)
+        target_root = out_dir.resolve()
+        for member in zf.infolist():
+            member_path = Path(member.filename)
+            if member_path.is_absolute():
+                raise ValueError(f"Unsafe ZIP entry: {member.filename}")
+            resolved_target = (target_root / member_path).resolve()
+            if target_root not in resolved_target.parents and resolved_target != target_root:
+                raise ValueError(f"Unsafe ZIP entry: {member.filename}")
+            if member.is_dir():
+                resolved_target.mkdir(parents=True, exist_ok=True)
+                continue
+            resolved_target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member, "r") as src, resolved_target.open("wb") as dst:
+                dst.write(src.read())
 
 
 def read_chat_text(extract_dir: Path) -> str:

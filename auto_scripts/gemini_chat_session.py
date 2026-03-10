@@ -28,10 +28,17 @@ AUTO_DATA_ROOT = PROJECT_ROOT / "auto_data"
 OUTPUT_SESSIONS_ROOT = AUTO_DATA_ROOT / "output" / "sessions"
 REPORTS_ROOT = PROJECT_ROOT / "reports"
 DEFAULT_CHARTS_ROOT = PROJECT_ROOT / "input" / "references" / "charts"
-ENV_PATH = Path(os.getenv("ENV_PATH", PROJECT_ROOT / ".env"))
-DEFAULT_MODEL = "gemini-3-pro-preview"
+ENV_PATH = Path(os.getenv("ENV_PATH", "~/.config/api-keys.env")).expanduser()
+DEFAULT_MODEL = "gemini-3.1-pro-preview"
 VALID_MODES = {"premarket", "intraday", "postmarket"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+AUTH_ENV_KEYS = (
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_PROJECT",
+    "GEMINI_API_KEY",
+    "VERTEX_LOCATION",
+)
 
 
 class RequestTimeoutError(RuntimeError):
@@ -58,7 +65,9 @@ def alarm_timeout(seconds: int):
 
 
 def load_env(path: Path) -> Dict[str, str]:
-    env: Dict[str, str] = {}
+    env: Dict[str, str] = {
+        key: value for key in AUTH_ENV_KEYS if (value := os.environ.get(key))
+    }
     if not path.exists():
         return env
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -107,7 +116,7 @@ def session_path(date_yyyymmdd: str, mode: str, session_id: str) -> Path:
     return OUTPUT_SESSIONS_ROOT / date_yyyymmdd / f"{mode}_{session_id}.jsonl"
 
 
-def read_jsonl(path: Path) -> List[Dict]:
+def read_jsonl_events(path: Path) -> List[Dict]:
     if not path.exists():
         return []
     rows: List[Dict] = []
@@ -120,6 +129,26 @@ def read_jsonl(path: Path) -> List[Dict]:
         except Exception:
             continue
     return rows
+
+
+def read_jsonl(path: Path) -> List[Dict]:
+    completed_by_turn: Dict[int, Dict] = {}
+    for row in read_jsonl_events(path):
+        if row.get("status", "ok") != "ok":
+            continue
+        turn = row.get("turn")
+        if isinstance(turn, int):
+            completed_by_turn[turn] = row
+    return [completed_by_turn[turn] for turn in sorted(completed_by_turn)]
+
+
+def next_turn_number(path: Path) -> int:
+    max_turn = 0
+    for row in read_jsonl_events(path):
+        turn = row.get("turn")
+        if isinstance(turn, int) and turn > max_turn:
+            max_turn = turn
+    return max_turn + 1
 
 
 def append_jsonl(path: Path, row: Dict) -> None:
@@ -391,29 +420,12 @@ def main() -> None:
         for ip in image_paths:
             print(f"  - {ip}")
 
-    def run_turn(user_text: str) -> None:
+    def run_turn(user_text: str) -> bool:
         nonlocal rows
-        prompt = build_prompt_with_context(
-            args.mode,
-            rows,
-            user_text,
-            args.max_history_turns,
-            context_text,
-        )
-        if image_paths:
-            assistant_text, usage = generate_reply_multimodal(
-                client,
-                args.model,
-                prompt,
-                args.request_timeout,
-                image_paths,
-                args.image_max_bytes,
-            )
-        else:
-            assistant_text, usage = generate_reply(client, args.model, prompt, args.request_timeout)
-        turn = len(rows) + 1
-        row = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        turn = next_turn_number(path)
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        base_row = {
+            "timestamp": timestamp,
             "date": args.date,
             "mode": args.mode,
             "session_id": session_id,
@@ -421,20 +433,60 @@ def main() -> None:
             "model": args.model,
             "auth": auth_mode,
             "user_text": user_text,
+            "assistant_text": "",
+            "tags": [],
+            "usage": {},
+            "context_files": [str(x) for x in context_paths],
+            "image_files": [str(x) for x in image_paths],
+        }
+        append_jsonl(path, {**base_row, "status": "pending"})
+        prompt = build_prompt_with_context(
+            args.mode,
+            rows,
+            user_text,
+            args.max_history_turns,
+            context_text,
+        )
+        try:
+            if image_paths:
+                assistant_text, usage = generate_reply_multimodal(
+                    client,
+                    args.model,
+                    prompt,
+                    args.request_timeout,
+                    image_paths,
+                    args.image_max_bytes,
+                )
+            else:
+                assistant_text, usage = generate_reply(client, args.model, prompt, args.request_timeout)
+        except Exception as exc:
+            append_jsonl(
+                path,
+                {
+                    **base_row,
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            )
+            print(f"\n[request failed] {exc}\n")
+            return False
+        row = {
+            **base_row,
             "assistant_text": assistant_text,
             "tags": extract_tags(user_text, assistant_text),
             "usage": usage,
-            "context_files": [str(x) for x in context_paths],
-            "image_files": [str(x) for x in image_paths],
+            "status": "ok",
         }
         append_jsonl(path, row)
         rows.append(row)
         print("\n--- Assistant ---")
         print(assistant_text)
         print("\n-----------------\n")
+        return True
 
     if args.message:
-        run_turn(args.message.strip())
+        if not run_turn(args.message.strip()):
+            raise SystemExit(1)
         return
 
     print("Interactive mode. Commands: /exit, /quit")
