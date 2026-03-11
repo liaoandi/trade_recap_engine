@@ -65,17 +65,18 @@ def alarm_timeout(seconds: int):
 
 
 def load_env(path: Path) -> Dict[str, str]:
-    env: Dict[str, str] = {
-        key: value for key in AUTH_ENV_KEYS if (value := os.environ.get(key))
-    }
-    if not path.exists():
-        return env
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#") or "=" not in s:
-            continue
-        k, v = s.split("=", 1)
-        env[k.strip()] = v.strip().strip('"').strip("'")
+    env: Dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            env[k.strip()] = v.strip().strip('"').strip("'")
+    for key in AUTH_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     return env
 
 

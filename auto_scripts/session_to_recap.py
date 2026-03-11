@@ -59,17 +59,18 @@ def alarm_timeout(seconds: int):
 
 
 def load_env(path: Path) -> Dict[str, str]:
-    env: Dict[str, str] = {
-        key: value for key in AUTH_ENV_KEYS if (value := os.environ.get(key))
-    }
-    if not path.exists():
-        return env
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#") or "=" not in s:
-            continue
-        k, v = s.split("=", 1)
-        env[k.strip()] = v.strip().strip('"').strip("'")
+    env: Dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            env[k.strip()] = v.strip().strip('"').strip("'")
+    for key in AUTH_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     return env
 
 
@@ -102,7 +103,7 @@ def make_client(env: Dict[str, str], location: str) -> Tuple[genai.Client, str]:
     raise RuntimeError("No Gemini auth found. Need project+creds or GEMINI_API_KEY.")
 
 
-def read_jsonl(path: Path) -> List[Dict]:
+def read_jsonl_events(path: Path) -> List[Dict]:
     rows: List[Dict] = []
     if not path.exists():
         return rows
@@ -115,6 +116,17 @@ def read_jsonl(path: Path) -> List[Dict]:
         except Exception:
             continue
     return rows
+
+
+def read_jsonl(path: Path) -> List[Dict]:
+    completed_by_turn: Dict[int, Dict] = {}
+    for row in read_jsonl_events(path):
+        if row.get("status", "ok") != "ok":
+            continue
+        turn = row.get("turn")
+        if isinstance(turn, int):
+            completed_by_turn[turn] = row
+    return [completed_by_turn[turn] for turn in sorted(completed_by_turn)]
 
 
 def collect_rows(date_yyyymmdd: str, mode: str) -> List[Dict]:
